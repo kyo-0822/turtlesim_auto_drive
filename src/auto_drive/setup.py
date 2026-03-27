@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'mock_lidar_pub = auto_drive.mock_lidar_pub:main',
             'motion_controller = auto_drive.motion_controller:main',
+            'connect_mysql = auto_drive.connect_mysql:main',
         ],
     },
 )
