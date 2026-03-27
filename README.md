@@ -1,18 +1,18 @@
-# 프로젝트 개요
+## 프로젝트 개요
 > 가상의 LiDAR 센서 데이터를 수집하여 시뮬레이션으로 확인, AI 학습을 위한 데이터셋(.npy)으로 변환하는 파이프라인
 
-# Teck Stack
+## Teck Stack
 - **Language :** python 3.10
 - **Framework :** ROS2 (humble), roslibpy (websocket)
 - **Database :** MySQL
 - **Library :** NumPy, PyMySQL
 
-# 주요 기능
+## 주요 기능
 1. **Lidar Data Simulation :** 'mock_lidar_pub.py' - 360도 전 방향 거리 데이터를 토픽으로 발행
 2. **Real_time control & Storage :** 'motion_controller.py' - 토픽을 구독해서 turtlesim 제어, 센서 값과 상태를 DB에 실시간 INSERT
 3. **Data Preprocessing :** 'data_processing.py' - DB에 저장된 데이터를 딥러닝 학습용 NumPy 배열('.npy')로 변환
 
-# 실행 방법
+## 실행 방법
 
 ### 1. 환경 설정
 ```bash
