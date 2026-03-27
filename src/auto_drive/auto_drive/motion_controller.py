@@ -1,43 +1,47 @@
-import rclpy
+import roslibpy
+import time
 import numpy as np
 import json
-
-from rclpy.node import Node
-from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+import threading
 from datetime import datetime
 from auto_drive.connect_mysql import connect_mysql
 
 
-class  MotionController(Node) :
-    def __init__(self) :
-        super().__init__('motion_controller')
+class  MotionController :
+    def __init__(self, ros) :
+        self.ros = ros
         self.conn = None
         self.cursor = None
         self.setup_db()
 
-        self.subscription = self.create_subscription(LaserScan, '/mock_scan', self.scan_callback, 10)
-        self.publisher = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
+        # turtlesim으로 msg 전달
+        self.publisher = roslibpy.Topic(self.ros, '/turtle1/cmd_vel', 'geometry_msgs/Twist')
 
+        # 모의 센서 데이터 구독
+        self.subscription = roslibpy.Topic(self.ros, '/mock_scan', 'sensor_msgs/LaserScan')
+        self.subscription.subscribe(self.scan_callback)
+        
         self.current_linear_v = 0.0
         self.current_angular_v = 0.0
         self.target_linear = 0.0
         self.target_angular = 0.0
-
         self.smooth_factor = 0.1
-        self.timer = self.create_timer(0.1, self.control_loop)
 
-    def setup_db(self) :
+        self.running = True
+        self.timer_thread = threading.Thread(target=self.control_loop)
+        self.timer_thread.start()
+
+    def setup_db(self) : # db 연결
         self.conn = connect_mysql()
         if self.conn:
             self.cursor = self.conn.cursor()
-            self.get_logger().info('DB 연결 성공')
+            print('DB 연결 성공')
         else :
-            self.get_logger().info('DB 연결 실패')
+            print('DB 연결 실패')
 
-    def save_db(self, ranges, action) :
+    def save_db(self, ranges, action) : # db에 데이터 저장
         if self.conn is None or not self.conn.open :
-            self.get_logger().info('DB 연결 끊김')
+            print('DB 연결 끊김')
             self.setup_db()
 
             if self.conn is None :
@@ -48,13 +52,16 @@ class  MotionController(Node) :
             json_ranges = json.dumps(list(ranges))
             self.cursor.execute(sql, (json_ranges, datetime.now(), action))
             self.conn.commit()
+
         except Exception as e :
-            self.get_logger().warn(f'DB 저장 실패 : {e}')
+            print(f'DB 저장 실패 : {e}')
 
 
-    def scan_filter (self, ranges, start, end) :
+    def scan_filter (self, ranges, start, end) : # 센서 노이즈 데이터 전처리 
         max_idx = len(ranges)
-        if max_idx == 0 : return 3.5
+
+        if max_idx == 0 :
+            return 3.5
 
         s = max(0, min(start, max_idx))
         e = max(0, min(end, max_idx))
@@ -66,25 +73,36 @@ class  MotionController(Node) :
     
 
     def control_loop(self) :
-        self.current_linear_v = (self.current_linear_v * (1 - self.smooth_factor)) + (self.target_linear * self.smooth_factor)
-        self.current_angular_v = (self.current_angular_v * (1 - self.smooth_factor)) + (self.target_angular * self.smooth_factor)
+        while self.running and self.ros.is_connected :
+            self.current_linear_v = (self.current_linear_v * (1 - self.smooth_factor)) + (self.target_linear * self.smooth_factor)
+            self.current_angular_v = (self.current_angular_v * (1 - self.smooth_factor)) + (self.target_angular * self.smooth_factor)
 
-        twist_msg = Twist()
-        twist_msg.linear.x = self.current_linear_v
-        twist_msg.angular.z = self.current_angular_v
-        self.publisher.publish(twist_msg)
+            twist_msg = {
+                'linear' : {'x': self.current_linear_v, 'y': 0.0, 'z': 0.0},
+                'angular' : {'x': 0.0, 'y': 0.0, 'z': self.current_angular_v}
+            }
+            self.publisher.publish(roslibpy.Message(twist_msg))
+            time.sleep(0.1)
 
 
     def scan_callback(self, msg) :
-        front_left = self.scan_filter(msg.ranges, 345, 360)
-        front_right = self.scan_filter(msg.ranges, 0, 15)
+        ranges = msg.get('ranges', [])
+
+        if not ranges or len(ranges) != 360 :
+            return
+        
+        front_left = self.scan_filter(ranges, 345, 360)
+        front_right = self.scan_filter(ranges, 0, 15)
         front_dist = (front_left + front_right) / 2
 
-        left_dist = self.scan_filter(msg.ranges, 15 , 90)
-        right_dist = self.scan_filter(msg.ranges, 270, 345)
+        left_dist = self.scan_filter(ranges, 15 , 90)
+        right_dist = self.scan_filter(ranges, 270, 345)
 
+        # 빈 공간 찾기
         force_left = 0.0 if left_dist > 2.5 else (1.0 / left_dist)
         force_right = 0.0 if right_dist > 2.5 else (1.0 / right_dist)
+
+        # 해당 방향 가중치
         angle_force = force_right - force_left
 
         action = 'STRAIGHT'
@@ -106,22 +124,36 @@ class  MotionController(Node) :
             self.target_linear = 1.0
 
         self.target_angular = max(-2.0, min(2.0, angle_force))
-        self.save_db(msg.ranges, action)
+        self.save_db(ranges, action)
+    
+    
+    def shutdown(self) :
+        self.running = False
+        self.timer_thread.join()
+
+        stop_msg = {
+            'linear' : {'x': 0.0, 'y': 0.0, 'z': 0.0},
+            'angular' : {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        }
+        self.publisher.publish(roslibpy.Message(stop_msg))
+        self.subscription.unsubscribe()
+        self.publisher.unadvertise()
 
 
 def main(args=None) :
-    rclpy.init(args=args)
-    node = MotionController()
+    ros = roslibpy.Ros(host='localhost', port=9090)
+    ros.run()
+
+    controller = MotionController(ros)
 
     try :
-        rclpy.spin(node)
+        while ros.is_connected :
+            time.sleep(1)
     except KeyboardInterrupt :
         pass
     finally :
-        stop_msg = Twist()
-        node.publisher.publish(stop_msg)
-        node.destroy_node()
-        rclpy.shutdown()
+        controller.shutdown()
+        ros.terminate()
 
 if __name__ == '__main__' :
     main()

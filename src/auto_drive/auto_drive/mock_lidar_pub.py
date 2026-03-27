@@ -1,15 +1,7 @@
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import LaserScan
+import roslibpy
+import time
 import random
 import math
-
-ANGLE_MIN_DEG = 0
-ANGLE_MAX_DEG = 359
-ANGLE_INCREMENT_DEG = 1
-NUM_POINTS = 360
-RANGE_MIN = 0.12 # 미터
-RANGE_MAX = 3.5 # 미터
 
 # ㅡㅡㅡㅡ 모의 센서 데이터 생성 ㅡㅡㅡㅡ
 class MockScanGenerator :
@@ -63,40 +55,41 @@ class MockScanGenerator :
             self.pattern_right_wall(scan)
         return scan, pattern_name
 
-# ㅡㅡㅡㅡ 데이터 퍼블리시 ㅡㅡㅡㅡ
-class MockLidarPub(Node) :
-    def __init__(self) :
-        super().__init__('mock_lidar_pub')
-        self.generator = MockScanGenerator()
-
-        self.publisher = self.create_publisher(LaserScan, '/mock_scan', 10)
-        self.timer = self.create_timer(2.0, self.timer_callback)
-
-    def timer_callback(self) :
-        scan_dict, pattern_name = self.generator.generate_single_scan()
-
-        msg = LaserScan()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'base_scan'
-
-        msg.angle_min = float(scan_dict["angle_min"])
-        msg.angle_max = float(scan_dict["angle_max"])
-        msg.angle_increment = float(scan_dict["angle_increment"])
-        msg.range_min = float(scan_dict["range_min"])
-        msg.range_max = float(scan_dict["range_max"])
-
-        # 360으로 초기화
-        msg.ranges = [float(r) for r in scan_dict["ranges"]]
-        msg.intensities = [float(i) for i in scan_dict["intensities"]]
-
-        self.publisher.publish(msg)
 
 def main(args=None) :
-    rclpy.init(args=args)
-    node = MockLidarPub()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    # 웹 소켓 연결
+    ros = roslibpy.Ros(host='localhost', port=9090)
+    ros.run()
+
+    publisher = roslibpy.Topic(ros, '/mock_scan', 'sensor_msgs/LaserScan')
+    generator = MockScanGenerator()
+
+    try :
+        while ros.is_connected:
+            scan_dict, pattern_name = generator.generate_single_scan()
+
+            msg = {
+                'header': {
+                    'frame_id' : 'base_scan'
+                },
+                'angle_min' : float(scan_dict["angle_min"]),
+                'angle_max' : float(scan_dict["angle_max"]),
+                'angle_increment' : float(scan_dict["angle_increment"]),
+                'range_min' : float(scan_dict["range_min"]),
+                'range_max' : float(scan_dict["range_max"]),
+                'ranges' : [float(r) for r in scan_dict["ranges"]],
+                'intensities' : [float(i) for i in scan_dict["intensities"]],
+            }
+
+            # 토픽 발행
+            publisher.publish(roslibpy.Message(msg))
+            time.sleep(2.0)
+            
+    except KeyboardInterrupt :
+        pass
+    finally :
+        publisher.unadvertise()
+        ros.terminate()
 
 if __name__ == '__main__' :
     main()

@@ -35,7 +35,7 @@ def processing_data() :
         
         dataset = np.array(all_features, dtype=object)
         file_name = 'robot_training_data.npy'
-        np.save(file_name, data)
+        np.save(file_name, dataset)
 
         return dataset
     
